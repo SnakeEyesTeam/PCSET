@@ -34,6 +34,7 @@ if __name__ == "__main__":
     print("Доступные команды:")
     print("1 - show_toast:текст (показать уведомление)")
     print("2 - open_tg:username (открыть Telegram)")
+    print("3 - open_tg:username (открыть Telegram)")
 
     with sr.Microphone() as src:
         r.adjust_for_ambient_noise(src, duration=0.5)
