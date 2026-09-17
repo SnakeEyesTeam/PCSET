@@ -1,5 +1,6 @@
 # server.py
 import time
+import socket
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import List, Dict
@@ -8,13 +9,44 @@ from typing import List, Dict
 HOST = "0.0.0.0"
 PORT = 8080
 
+def get_local_ip() -> str:
+    """
+    Возвращает локальный IP, предпочитая 192.168.x.x.
+    Пропускает виртуальные адаптеры (WSL2, Docker, Hyper-V).
+    """
+    try:
+        hostname = socket.gethostname()
+        infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        for info in infos:
+            ip = info[4][0]
+            if ip.startswith("192.168."):
+                return ip
+    except Exception:
+        pass
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            if ip.startswith("192.168."):
+                return ip
+        except OSError:
+            pass
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
+
+LOCAL_IP = get_local_ip()
+
 app = FastAPI()
 
-# Хранилища в памяти
 devices: List[Dict] = []
 commands: List[Dict] = []
 
-# --- Модели данных ---
 class CommandRequest(BaseModel):
     cmd: str
     target_ip: str
@@ -26,8 +58,6 @@ class RegisterRequest(BaseModel):
 
 class DoneRequest(BaseModel):
     cmd_id: int
-
-# --- Эндпоинты сервера ---
 
 @app.post("/command")
 def add_command(req: CommandRequest):
@@ -74,7 +104,7 @@ def register_device(req: RegisterRequest):
             d["last_seen"] = now
             print(f"🔄 Устройство обновлено: {req.ip} ({req.name})")
             return {"ok": True, "msg": "updated"}
-    
+
     devices.append({
         "ip": req.ip,
         "port": req.port,
@@ -87,8 +117,3 @@ def register_device(req: RegisterRequest):
 @app.get("/devices")
 async def get_devices():
     return devices
-
-if __name__ == "__main__":
-    import uvicorn
-    print(f"🚀 Запуск FastAPI сервера на http://{HOST}:{PORT}")
-    uvicorn.run(app, host=HOST, port=PORT)

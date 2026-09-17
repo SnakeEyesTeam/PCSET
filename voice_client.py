@@ -1,51 +1,94 @@
-# client_voice.py
-import threading
+# voice_client.py
+import os
 import time
 import socket
 import requests
-import os
 import speech_recognition as sr
 
-# --- КОНФИГУРАЦИЯ (должна совпадать с server.py) ---
-SERVER_URL = "http://192.168.0.101:8080"  # IP твоего ПК
-PHONE_IP = "192.168.0.55"               # IP телефона
+PORT = 8080
+PHONE_NAME = "MyPhone"
+
+def get_local_ip() -> str:
+    """
+    Возвращает локальный IP, предпочитая 192.168.x.x.
+    """
+    try:
+        hostname = socket.gethostname()
+        infos = socket.getaddrinfo(hostname, None, socket.AF_INET)
+        for info in infos:
+            ip = info[4][0]
+            if ip.startswith("192.168."):
+                return ip
+    except Exception:
+        pass
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 80))
+            ip = s.getsockname()[0]
+            if ip.startswith("192.168."):
+                return ip
+        except OSError:
+            pass
+
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        try:
+            s.connect(("8.8.8.8", 80))
+            return s.getsockname()[0]
+        except OSError:
+            return "127.0.0.1"
+
+LOCAL_IP = get_local_ip()
+SERVER_URL = f"http://{LOCAL_IP}:{PORT}"
+
+def get_phone_ip() -> str | None:
+    """Получает актуальный IP телефона из /devices на сервере."""
+    try:
+        resp = requests.get(f"{SERVER_URL}/devices", timeout=5)
+        devices_list = resp.json()
+        for d in devices_list:
+            if d.get("name") == PHONE_NAME:
+                return d.get("ip")
+    except Exception:
+        pass
+    return None
 
 def send_command(action: str, payload: str | None = None):
-    print(f"Отправляем: {action} для {PHONE_IP}")
-    data = {"cmd": action, "target_ip": PHONE_IP}
+    phone_ip = get_phone_ip()
+    if not phone_ip:
+        print("⚠️ Телефон не зарегистрирован. Жду регистрации...")
+        return
+
+    print(f"Отправляем: {action} для {phone_ip}")
+    data = {"cmd": action, "target_ip": phone_ip}
     if payload is not None:
         data["payload"] = payload
 
     try:
-        resp = requests.post(
-            f"{SERVER_URL}/command",
-            json=data,
-            timeout=5
-        )
+        resp = requests.post(f"{SERVER_URL}/command", json=data, timeout=5)
         print("Статус:", resp.status_code)
     except requests.exceptions.ConnectionError:
-        print("❌ Не удалось подключиться. Проверь IP и фаервол.")
+        print("❌ Не удалось подключиться. Проверь, запущен ли сервер.")
     except Exception as e:
         print("Ошибка:", e)
 
 def run_registration():
-    """Фоновая регистрация сервера в самом себе"""
-    hostname = socket.gethostname()
-    ip = socket.gethostbyname(hostname)
-    SERVER_REGISTRY_URL = f"http://{ip}:8080/register"
-    
+    """Фоновая регистрация ПК на сервере."""
     while True:
         try:
-            data = {"ip": ip, "port": 8080, "name": "MyDevPC"}
-            requests.post(SERVER_REGISTRY_URL, json=data, timeout=5)
+            data = {
+                "ip": get_local_ip(),
+                "port": PORT,
+                "name": "MyDevPC"
+            }
+            requests.post(f"{SERVER_URL}/register", json=data, timeout=5)
         except Exception:
             pass
         time.sleep(30)
 
 def voice_client_loop():
-    """Бесконечный цикл прослушивания микрофона"""
     r = sr.Recognizer()
-    
+
     while True:
         print("\n--- Ожидание команды (5 сек) ---")
         try:
@@ -68,26 +111,10 @@ def voice_client_loop():
 
         if cmd == "показать уведомление":
             text = input("Текст для toast: ")
-            send_command(f"show_toast:{text}") 
+            send_command(f"show_toast:{text}")
         elif cmd == "открыть telegram":
             send_command("open_tg_app")
         elif cmd == "стоп":
             os._exit(0)
         else:
             print(f"Неверная команда: {cmd!r}. Попробуй снова.")
-
-if __name__ == "__main__":
-    reg_thread = threading.Thread(target=run_registration, daemon=True)
-    reg_thread.start()
-
-    client_thread = threading.Thread(target=voice_client_loop, daemon=True)
-    client_thread.start()
-
-    print("💡 Голосовой клиент работает в фоне. Говори команды!")
-
-    # Клиент не запускает uvicorn — он только отправляет команды
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        os._exit(0)
